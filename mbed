@@ -1,0 +1,401 @@
+#include "mbed.h"
+#include "Adafruit_SSD1306.h"
+#define PROGMEM
+
+// an I2C sub-class that provides a constructed default
+class I2CPreInit : public I2C {
+public:
+    I2CPreInit(PinName sda, PinName scl) : I2C(sda, scl) {
+        frequency(400000);
+        start();
+    };
+};
+
+class Player {
+public:
+    Player(uint8_t startLine = 0) : line(startLine) {}
+
+    void move_up() {
+        if (line > 0) { line--; }
+    }
+
+    void move_down() {
+        if (line < 2) { line++; }
+    }
+
+    uint8_t check_line() {
+        return line;
+    }
+
+protected:
+    uint8_t line;
+};
+
+class Board {
+public:
+    Board(Adafruit_SSD1306_I2c *display, uint8_t initialScore = 0, uint8_t initialLife = 3, int16_t orig_x = 93, int16_t orig_y = 10)
+        : score(initialScore), time(0), orig_x(orig_x), orig_y(orig_y) {
+        for (int i = 0; i < 2; i++) {
+            score_clr[i] = '0';
+        }
+        for (int i = 0; i < 3; i++) {
+            time_clr[i] = '0';
+        }
+    }
+
+    void score_up() {
+        score++;
+    }
+
+    void time_up() {
+        time++;
+    }
+
+    uint8_t check_score() {
+        return score;
+    }
+
+    uint8_t check_time() {
+        return time;
+    }
+
+    char* Int2CharArray(int number, char charArray[]) {
+        int index = 0;
+        do {
+            charArray[index] = '0' + (int)(number % 10);
+            index++;
+            number = (int)(number / 10);
+        } while (number > 0);
+
+        for (int i = 0; i < index / 2; ++i) {
+            char temp = charArray[i];
+            charArray[i] = charArray[index - i - 1];
+            charArray[index - i - 1] = temp;
+        }
+        return charArray;
+    }
+
+    void drawStr(int16_t x, int16_t y, Adafruit_SSD1306_I2c *display, int Array_len, char* charArray, char* charClear) {
+        int16_t clr_x = x;
+        for (int i = 0; i < Array_len; i++) {
+            display->drawChar(clr_x, y, charClear[i], BLACK, BLACK, 1);
+            clr_x = clr_x + 6;
+        }
+        for (int i = 0; i < Array_len; i++) {
+            display->drawChar(x, y, charArray[i], WHITE, WHITE, 1);
+            charClear[i] = charArray[i];
+            x = x + 6;
+        }
+    }
+
+    void drawScore(Adafruit_SSD1306_I2c *display) {
+        char score_cab[] = { 0, 0 };
+        char *score_ca = Int2CharArray(score, score_cab);
+        char time_cab[] = { 0, 0, 0 };
+        char *time_ca = Int2CharArray(time, time_cab);
+
+        drawStr(orig_x, score_y, display, 2, score_ca, score_clr);
+        drawStr(orig_x, time_y, display, 3, time_ca, time_clr);
+    }
+
+    void initScore(Adafruit_SSD1306_I2c *display) {
+        int16_t y = orig_y;
+        int str_len = 6;
+        char score_str[] = { 'S', 'c', 'o', 'r', 'e', ':' };
+        char score_cab[] = { 0, 0 };
+        char* score_ca = Int2CharArray(score, score_cab);
+        char time_str[] = { 'T', 'i', 'm', 'e', ':', ' ' };
+        char time_cab[] = { 0, 0, 0 };
+        char* time_ca = Int2CharArray(time, time_cab);
+
+        drawStr(orig_x, y, display, str_len, score_str, score_str);
+        y = y + 8;
+        score_y = y;
+        drawStr(orig_x, score_y, display, 2, score_ca, score_clr);
+        y = y + 8;
+        drawStr(orig_x, y, display, str_len, time_str, time_str);
+        y = y + 8;
+        time_y = y;
+        drawStr(orig_x, time_y, display, 3, time_ca, time_clr);
+        y = y + 8;
+    }
+
+protected:
+    uint8_t score;
+    uint8_t time;
+    int16_t orig_x;
+    int16_t orig_y;
+    int16_t score_y;
+    int16_t time_y;
+    char score_clr[2];
+    char time_clr[3];
+};
+
+class Enemy {
+public:
+    Enemy(uint8_t startLine, uint8_t startX = 13, bool startactive = false, bool danger = false) : x(startX), line(startLine), active(startactive) {}
+
+    void move(Board& board) {
+        if (active) {
+            if (x == 0) {
+                board.score_up();
+                deactivate();
+                x = 13;
+                danger = false;
+            } else {
+                if (x == 3) {
+                    danger = true;
+                }
+                x--;
+            }
+        }
+    }
+
+    bool check_active() {
+        return active;
+    }
+
+    void activate() {
+        active = true;
+    }
+
+    void deactivate() {
+        active = false;
+    }
+
+    uint8_t check_x() {
+        return x;
+    }
+
+    void danger_false() {
+        danger = false;
+    }
+
+    bool check_danger() {
+        return danger;
+    }
+
+protected:
+    uint8_t x;
+    uint8_t line;
+    bool active;
+    bool danger;
+};
+
+const uint8_t PROGMEM motorcycle_bitmap_left[] = {
+    0x30, 0x78, 0xcc, 0x84, 0x84, 0xcc, 0x48, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const uint8_t PROGMEM motorcycle_bitmap_right[] = {
+    0xcc, 0x84, 0x84, 0xcc, 0x49, 0xfe, 0x78, 0x00, 0x00, 0x00, 0x00, 0x02, 0x01, 0x00
+};
+
+const uint8_t PROGMEM car_bitmap[] = {
+    0xcc, 0xfe, 0x02, 0xfe, 0x02, 0x02, 0x02, 0x02, 0x02, 0xfe, 0x02, 0x02, 0x02, 0xfe, 0x00, 0x01,
+    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01
+};
+
+int x, y;
+uint8_t state;
+uint8_t generate_count = 5;
+int delay;
+I2C myI2C(I2C_SDA, I2C_SCL);
+Adafruit_SSD1306_I2c myGUI(myI2C, D13, 0x78, 64, 128);
+AnalogIn y_axis(PC_3);
+DigitalIn button(PA_14);
+DigitalOut buzzer(PC_9);
+Player player = Player(1);
+Enemy enemy0 = Enemy(0);
+Enemy enemy1 = Enemy(1);
+Enemy enemy2 = Enemy(2);
+Board board = Board(&myGUI);
+Ticker joystick;
+Ticker counter;
+Timer t;
+
+void initializeDisplay() {
+    myGUI.begin(SSD1306_SWITCHCAPVCC);
+    myGUI.clearDisplay();
+    myGUI.display();
+}
+
+void beep() {
+    buzzer = 1;
+    wait_ms(100);
+    buzzer = 0;
+}
+
+void displayPauseScreen(Adafruit_SSD1306_I2c *display) {
+    display->clearDisplay();
+    display->setTextCursor(10, 20);
+    display->setTextSize(1);
+    display->printf("PAUSED\n");
+    display->printf("Press button to resume\n");
+    display->display();
+}
+
+void gameOverScreen(Adafruit_SSD1306_I2c *display, uint8_t score, uint8_t time) {
+    display->clearDisplay();
+    display->setTextCursor(0, 0);
+    display->printf("GAME OVER\n");
+    display->printf("Score: %d\n", score);
+    display->printf("Time: %d sec\n", time);
+    display->display();
+}
+
+void joystick_Handler() {
+    y = y_axis.read() * 1000;
+
+    if (y < 600) {
+        state = 2;
+    } else if (y > 800) {
+        state = 1;
+    } else {
+        state = 0;
+    }
+}
+
+void time_Handler() {
+    board.time_up();
+}
+
+void create_enemy() {
+    uint8_t num = rand() % 3;
+    switch (num) {
+    case 0:
+        enemy0.activate();
+        break;
+    case 1:
+        enemy1.activate();
+        break;
+    case 2:
+        enemy2.activate();
+        break;
+    }
+}
+
+int main() {
+    initializeDisplay();
+
+    myGUI.setTextCursor(10, 20);
+    myGUI.setTextSize(1);
+    myGUI.printf("Press button to start\n");
+    myGUI.display();
+    while (1) {
+        if (!button) {
+            while(!button) wait(0.7);
+            break;
+        }
+    }
+
+    joystick.attach(&joystick_Handler, 0.1);
+    counter.attach(&time_Handler, 1.0);
+
+    myGUI.clearDisplay();
+    for (int16_t l = 0; l < 128; l++) {
+        myGUI.drawPixel(l, 0, WHITE);
+        myGUI.drawPixel(l, 63, WHITE);
+        if (((10 < l) && (l <= 25)) || ((35 < l) && (l <= 50)) || ((60 < l) && (l <= 75))) {
+            myGUI.drawPixel(l, 21, WHITE);
+            myGUI.drawPixel(l, 42, WHITE);
+        }
+    }
+    for (int16_t m = 0; m < 64; m++) {
+        myGUI.drawPixel(85, m, WHITE);
+        myGUI.drawPixel(127, m, WHITE);
+    }
+    board.initScore(&myGUI);
+    bool running = true;
+    bool paused = false;
+    uint8_t lives = 3;
+    t.start();
+
+    while (running) {
+        if (!button && !paused) {
+             while(!button) wait(0.7);
+            paused = true;
+            displayPauseScreen(&myGUI);
+            while (paused) {
+                if (!button) {
+                    paused = false;
+                    myGUI.clearDisplay();
+                              myGUI.clearDisplay();
+    for (int16_t l = 0; l < 128; l++) {
+        myGUI.drawPixel(l, 0, WHITE);
+        myGUI.drawPixel(l, 63, WHITE);
+        if (((10 < l) && (l <= 25)) || ((35 < l) && (l <= 50)) || ((60 < l) && (l <= 75))) {
+            myGUI.drawPixel(l, 21, WHITE);
+            myGUI.drawPixel(l, 42, WHITE);
+        }
+    }
+    for (int16_t m = 0; m < 64; m++) {
+        myGUI.drawPixel(85, m, WHITE);
+        myGUI.drawPixel(127, m, WHITE);
+    }
+    board.initScore(&myGUI);
+                    break;
+                }
+            }
+        }
+
+        t.reset();
+        if (generate_count == 5) {
+            create_enemy();
+            generate_count = 0;
+        }
+
+        myGUI.drawBitmap(0, 5 + player.check_line() * 20, car_bitmap, 14, 14, BLACK);
+        if (state == 1) player.move_down();
+        else if (state == 2) player.move_up();
+        myGUI.drawBitmap(0, 5 + player.check_line() * 20, car_bitmap, 14, 14, WHITE);
+
+        if (enemy0.check_x() > 0) myGUI.drawBitmap(enemy0.check_x() * 7 - 7, 7, motorcycle_bitmap_left, 7, 10, BLACK);
+        if (enemy0.check_x() < 12) myGUI.drawBitmap(enemy0.check_x() * 7, 7, motorcycle_bitmap_right, 7, 10, BLACK);
+        if (enemy1.check_x() > 0) myGUI.drawBitmap(enemy1.check_x() * 7 - 7, 27, motorcycle_bitmap_left, 7, 10, BLACK);
+        if (enemy1.check_x() < 12) myGUI.drawBitmap(enemy1.check_x() * 7, 27, motorcycle_bitmap_right, 7, 10, BLACK);
+        if (enemy2.check_x() > 0) myGUI.drawBitmap(enemy2.check_x() * 7 - 7, 47, motorcycle_bitmap_left, 7, 10, BLACK);
+        if (enemy2.check_x() < 12) myGUI.drawBitmap(enemy2.check_x() * 7, 47, motorcycle_bitmap_right, 7, 10, BLACK);
+
+        enemy0.move(board);
+        enemy1.move(board);
+        enemy2.move(board);
+            
+            if (enemy0.check_x() > 0 && enemy0.check_x() < 13) myGUI.drawBitmap(enemy0.check_x() * 7 - 7, 7, motorcycle_bitmap_left, 7, 10, WHITE);
+        if (enemy0.check_x() < 12) myGUI.drawBitmap(enemy0.check_x() * 7, 7, motorcycle_bitmap_right, 7, 10, WHITE);
+        if (enemy1.check_x() > 0 && enemy1.check_x() < 13) myGUI.drawBitmap(enemy1.check_x() * 7 - 7, 27, motorcycle_bitmap_left, 7, 10, WHITE);
+        if (enemy1.check_x() < 12) myGUI.drawBitmap(enemy1.check_x() * 7, 27, motorcycle_bitmap_right, 7, 10, WHITE);
+        if (enemy2.check_x() > 0 && enemy2.check_x() < 13) myGUI.drawBitmap(enemy2.check_x() * 7 - 7, 47, motorcycle_bitmap_left, 7, 10, WHITE);
+        if (enemy2.check_x() < 12) myGUI.drawBitmap(enemy2.check_x() * 7, 47, motorcycle_bitmap_right, 7, 10, WHITE);
+
+
+
+        if (player.check_line() == 0 && enemy0.check_danger()) {
+            beep();
+            lives--;
+            enemy0.danger_false();
+        } else if (player.check_line() == 1 && enemy1.check_danger()) {
+            beep();
+            lives--;
+            enemy1.danger_false();
+        } else if (player.check_line() == 2 && enemy2.check_danger()) {
+            beep();
+            lives--;
+            enemy2.danger_false();
+        }
+
+        if (lives == 0) {
+            running = false;
+        }
+
+        generate_count++;
+        delay = 16 - t.read_ms();
+        if (delay > 0) wait_ms(delay);
+
+        board.drawScore(&myGUI);
+        myGUI.setTextCursor(0, 0);
+        myGUI.printf("Lives: %d", lives);
+        myGUI.display();
+    }
+
+    gameOverScreen(&myGUI, board.check_score(), board.check_time());
+}
